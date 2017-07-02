@@ -212,7 +212,7 @@ func testAccCheckAWSKmsKeyExists(name string, key *kms.KeyMetadata) resource.Tes
 
 		conn := testAccProvider.Meta().(*AWSClient).kmsconn
 
-		out, err := conn.DescribeKey(&kms.DescribeKeyInput{
+		out, err := retryDescribeKmsKey(conn, &kms.DescribeKeyInput{
 			KeyId: aws.String(rs.Primary.ID),
 		})
 		if err != nil {

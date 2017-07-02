@@ -125,7 +125,7 @@ func resourceAwsKmsKeyCreate(d *schema.ResourceData, meta interface{}) error {
 	d.SetId(*resp.KeyMetadata.KeyId)
 	d.Set("key_id", resp.KeyMetadata.KeyId)
 
-	return _resourceAwsKmsKeyUpdate(d, meta, true)
+	return resourceAwsKmsKeyUpdate(d, meta)
 }
 
 func resourceAwsKmsKeyRead(d *schema.ResourceData, meta interface{}) error {
@@ -134,7 +134,14 @@ func resourceAwsKmsKeyRead(d *schema.ResourceData, meta interface{}) error {
 	req := &kms.DescribeKeyInput{
 		KeyId: aws.String(d.Id()),
 	}
-	resp, err := conn.DescribeKey(req)
+
+	var resp *kms.DescribeKeyOutput
+	var err error
+	if d.IsNewResource() {
+		resp, err = retryDescribeKmsKey(conn, req)
+	} else {
+		resp, err = conn.DescribeKey(req)
+	}
 	if err != nil {
 		return err
 	}
@@ -188,16 +195,10 @@ func resourceAwsKmsKeyRead(d *schema.ResourceData, meta interface{}) error {
 }
 
 func resourceAwsKmsKeyUpdate(d *schema.ResourceData, meta interface{}) error {
-	return _resourceAwsKmsKeyUpdate(d, meta, false)
-}
-
-// We expect new keys to be enabled already
-// but there is no easy way to differentiate between Update()
-// called from Create() and regular update, so we have this wrapper
-func _resourceAwsKmsKeyUpdate(d *schema.ResourceData, meta interface{}, isFresh bool) error {
 	conn := meta.(*AWSClient).kmsconn
 
-	if d.HasChange("is_enabled") && d.Get("is_enabled").(bool) && !isFresh {
+	// We expect new keys to be enabled already
+	if d.HasChange("is_enabled") && d.Get("is_enabled").(bool) && !d.IsNewResource() {
 		// Enable before any attributes will be modified
 		if err := updateKmsKeyStatus(conn, d.Id(), d.Get("is_enabled").(bool)); err != nil {
 			return err
@@ -454,4 +455,21 @@ func resourceAwsKmsKeyDelete(d *schema.ResourceData, meta interface{}) error {
 	log.Printf("[DEBUG] KMS Key %s deactivated.", keyId)
 	d.SetId("")
 	return nil
+}
+
+func retryDescribeKmsKey(conn *kms.KMS, req *kms.DescribeKeyInput) (*kms.DescribeKeyOutput, error) {
+	var resp *kms.DescribeKeyOutput
+	err := resource.Retry(1*time.Minute, func() *resource.RetryError {
+		var err error
+		resp, err = conn.DescribeKey(req)
+		if err != nil {
+			awsErr, ok := err.(awserr.Error)
+			if ok && awsErr.Code() == "NotFoundException" {
+				return resource.RetryableError(err)
+			}
+			return resource.NonRetryableError(err)
+		}
+		return nil
+	})
+	return resp, err
 }
